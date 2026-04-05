@@ -61,6 +61,14 @@ tr:nth-child(even){background:#f8f9fa}
 #utm-zone{border:1px solid #dadce0;border-radius:6px;padding:6px 10px;font-size:.92rem;
   width:68px;text-transform:uppercase;font-weight:700;color:#1a73e8}
 .zone-hint{font-size:.75rem;color:#9aa0a6}
+#paste-section{background:#fff;border-radius:10px;padding:12px 14px;margin-bottom:12px;
+  font-size:.88rem;color:#5f6368}
+#paste-section summary{cursor:pointer;font-weight:600;color:#1a73e8;list-style:none;
+  padding:2px 0}
+#paste-section summary::before{content:'▶ ';font-size:.75rem}
+#paste-section[open] summary::before{content:'▼ '}
+#paste-area{width:100%;min-height:110px;margin-top:10px;border:1px solid #dadce0;
+  border-radius:8px;padding:10px;font-size:.85rem;resize:vertical;font-family:monospace}
 #no-ocr-warning{background:#fff3cd;border-left:4px solid #f0a500;border-radius:8px;
   padding:12px 14px;font-size:.85rem;color:#7a4f00;margin-bottom:12px;display:none}
 #no-ocr-warning.show{display:block}
@@ -86,6 +94,12 @@ tr:nth-child(even){background:#f8f9fa}
            title="Usada para coordenadas no formato X= Y= sem zona especificada">
     <span class="zone-hint">para formato X= Y=</span>
   </div>
+
+  <details id="paste-section">
+    <summary>&#128203; Ou cole o texto aqui</summary>
+    <textarea id="paste-area" placeholder="Cole aqui o texto copiado do PDF, documento ou imagem..."></textarea>
+    <button id="paste-btn" class="btn btn-primary" style="margin-top:8px">Extrair coordenadas</button>
+  </details>
 
   <div id="no-ocr-warning">
     &#9888; Imagens e PDFs digitalizados n&#227;o possuem texto seleccion&#225;vel.
@@ -156,6 +170,26 @@ uploadZone.addEventListener('drop', e => {
   if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]);
 });
 fileInput.addEventListener('change', () => { if (fileInput.files[0]) processFile(fileInput.files[0]); });
+
+// ── Paste text flow ────────────────────────────────────────────────
+document.getElementById('paste-btn').addEventListener('click', () => {
+  const text = document.getElementById('paste-area').value.trim();
+  if (!text) return;
+  resetUI();
+  showStatus('info', true, 'Analisando texto colado\u2026');
+  setTimeout(() => {
+    const coords = extractCoordinates(text);
+    if (coords.length === 0) {
+      showStatus('error', false, 'Nenhuma coordenada encontrada no texto.');
+      return;
+    }
+    kmlContent  = generateKML(coords, 'texto-colado');
+    kmlFilename = 'texto-colado-coordenadas.kml';
+    renderTable(coords);
+    showStatus('success', false, coords.length + ' coordenada' + (coords.length > 1 ? 's' : '') + ' encontrada' + (coords.length > 1 ? 's' : ''));
+    enableButtons();
+  }, 50);
+});
 
 // ── Main flow ─────────────────────────────────────────────────────
 async function processFile(file) {
@@ -347,7 +381,8 @@ function extractCoordinates(text) {
 
   // ── 3b. UTM X= Y= (documentos brasileiros: "X=203101.1645, Y=7523182.5878") ──
   // Zona não está no texto — usa o campo de zona UTM da interface
-  const rXY = /X\s*=\s*(\d{5,7}(?:[.,]\d+)?)\s*,?\s+Y\s*=\s*(\d{6,8}(?:[.,]\d+)?)/gi;
+  // Separador flexível: vírgula, ponto-e-vírgula, espaço(s), combinações
+  const rXY = /X\s*=\s*(\d{5,7}(?:[.,]\d+)?)[,;\s]+Y\s*=\s*(\d{6,8}(?:[.,]\d+)?)/gi;
   const xyZone = (document.getElementById('utm-zone')?.value.trim().toUpperCase() || '24K');
   for (const m of text.matchAll(rXY)) {
     const east  = parseFloat(normDecimal(m[1]));
