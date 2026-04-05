@@ -350,6 +350,28 @@ function dmsToDecimal(deg, min, sec, dir) {
   return (/[SsOoWw]/.test(dir)) ? -d : d;
 }
 
+// Convert signed DMS value (no N/S/E/W) to decimal
+// "-42°39'05,236"" → -42.651732
+function signedDmsToDecimal(deg, min, sec) {
+  const sign = parseFloat(deg) < 0 ? -1 : 1;
+  const d = Math.abs(parseFloat(deg)) + parseFloat(min)/60 + parseFloat(normDecimal(sec))/3600;
+  return sign * d;
+}
+
+// Assign lat/lon from two signed values (no hemisphere suffix)
+// Uses: value outside (-90,90) must be lon; if both in range, larger |value| = lon
+function guessLatLon(a, b) {
+  const aIsLat = a >= -90 && a <= 90;
+  const bIsLat = b >= -90 && b <= 90;
+  const aIsLon = a >= -180 && a <= 180;
+  const bIsLon = b >= -180 && b <= 180;
+  if (!aIsLon || !bIsLon) return null;
+  if (!aIsLat && bIsLat) return { lat: b, lon: a }; // a too big for lat
+  if (!bIsLat && aIsLat) return { lat: a, lon: b }; // b too big for lat
+  // Both valid for lat — larger |value| is likely longitude (works for Brazil)
+  return Math.abs(a) >= Math.abs(b) ? { lat: b, lon: a } : { lat: a, lon: b };
+}
+
 function extractCoordinates(text) {
   const results = [];
 
@@ -382,6 +404,18 @@ function extractCoordinates(text) {
     const lon = dmsToDecimal(m[6], m[7], m[8], m[5]);
     if (validLatLon(lat, lon))
       results.push({ type:'dms', raw: m[0].trim(), lat, lon });
+  }
+
+  // ── 2c. DMS com sinal negativo, sem N/S/L/O ─────────────────────────
+  // Ex: -42°39'05,236"  -22°31'08,506"  (SIGEF, Memorial Descritivo)
+  // Ex: -42°39'05.236"  -22°31'08.506"
+  const rDMSSigned = /(-?\d{1,3})\s*[°º]\s*(\d{1,2})\s*['′]\s*(\d{1,2}[.,]\d+)\s*["″]\s+(-?\d{1,3})\s*[°º]\s*(\d{1,2})\s*['′]\s*(\d{1,2}[.,]\d+)\s*["″]/g;
+  for (const m of text.matchAll(rDMSSigned)) {
+    const a = signedDmsToDecimal(m[1], m[2], m[3]);
+    const b = signedDmsToDecimal(m[4], m[5], m[6]);
+    const pair = guessLatLon(a, b);
+    if (pair && validLatLon(pair.lat, pair.lon))
+      results.push({ type:'dms', raw: m[0].trim(), lat: pair.lat, lon: pair.lon });
   }
 
   // ── 3a. UTM com zona: 23K 333000 7375000 / Zona 23K E333000 N7375000 ──
