@@ -69,6 +69,10 @@ tr:nth-child(even){background:#f8f9fa}
 #paste-section[open] summary::before{content:'▼ '}
 #paste-area{width:100%;min-height:110px;margin-top:10px;border:1px solid #dadce0;
   border-radius:8px;padding:10px;font-size:.85rem;resize:vertical;font-family:monospace}
+#polygon-opt{background:#fff;border-radius:10px;padding:10px 14px;margin-bottom:12px;
+  display:flex;flex-direction:column;gap:8px;font-size:.88rem;color:#202124}
+#polygon-opt label{display:flex;align-items:center;gap:8px;cursor:pointer}
+#polygon-opt input[type=checkbox]{width:18px;height:18px;accent-color:#1a73e8}
 #no-ocr-warning{background:#fff3cd;border-left:4px solid #f0a500;border-radius:8px;
   padding:12px 14px;font-size:.85rem;color:#7a4f00;margin-bottom:12px;display:none}
 #no-ocr-warning.show{display:block}
@@ -100,6 +104,11 @@ tr:nth-child(even){background:#f8f9fa}
     <textarea id="paste-area" placeholder="Cole aqui o texto copiado do PDF, documento ou imagem..."></textarea>
     <button id="paste-btn" class="btn btn-primary" style="margin-top:8px">Extrair coordenadas</button>
   </details>
+
+  <div id="polygon-opt">
+    <label><input type="checkbox" id="chk-polygon" checked> Desenhar pol&#237;gono (liga os pontos em ordem)</label>
+    <label><input type="checkbox" id="chk-points" checked> Mostrar pontos individuais</label>
+  </div>
 
   <div id="no-ocr-warning">
     &#9888; Imagens e PDFs digitalizados n&#227;o possuem texto seleccion&#225;vel.
@@ -487,27 +496,69 @@ function esc(s) {
 }
 
 function generateKML(coords, sourceName) {
-  const placemarks = coords.map((c, i) => {
-    const name = 'Ponto ' + (i+1) + ' \u2013 ' + c.type.toUpperCase();
-    const extra = c.extra ? '<br>' + esc(c.extra) : '';
-    const desc = 'Tipo: ' + c.type.toUpperCase()
-      + '<br>Original: ' + esc(c.raw)
-      + extra
-      + '<br>Lat: ' + c.lat.toFixed(8)
-      + '<br>Lon: ' + c.lon.toFixed(8);
-    // KML coordinates: lon,lat,altitude
-    return `  <Placemark>
+  const showPolygon = document.getElementById('chk-polygon')?.checked !== false;
+  const showPoints  = document.getElementById('chk-points')?.checked !== false;
+
+  const styles = `
+  <Style id="pt">
+    <IconStyle>
+      <color>ffFFD700</color>
+      <scale>0.6</scale>
+      <Icon><href>http://maps.google.com/mapfiles/kml/shapes/placemark_circle.png</href></Icon>
+    </IconStyle>
+    <LabelStyle><scale>0.65</scale></LabelStyle>
+  </Style>
+  <Style id="poly">
+    <LineStyle><color>ff0055ff</color><width>3</width></LineStyle>
+    <PolyStyle><color>330055ff</color><fill>1</fill><outline>1</outline></PolyStyle>
+  </Style>`;
+
+  // Polygon: connect all points + close back to first
+  let polygonKml = '';
+  if (showPolygon && coords.length >= 3) {
+    const ring = [...coords, coords[0]]
+      .map(c => c.lon.toFixed(8) + ',' + c.lat.toFixed(8) + ',0')
+      .join('\n          ');
+    polygonKml = `
+  <Placemark>
+    <name>Per\u00edmetro</name>
+    <styleUrl>#poly</styleUrl>
+    <Polygon>
+      <outerBoundaryIs><LinearRing>
+        <coordinates>${ring}</coordinates>
+      </LinearRing></outerBoundaryIs>
+    </Polygon>
+  </Placemark>`;
+  }
+
+  // Individual points
+  let placemarks = '';
+  if (showPoints) {
+    placemarks = coords.map((c, i) => {
+      const name = 'V-' + String(i+1).padStart(2,'0');
+      const extra = c.extra ? '<br>' + esc(c.extra) : '';
+      const desc = 'V\u00e9rtice: ' + (i+1)
+        + '<br>Tipo: ' + c.type.toUpperCase()
+        + '<br>Original: ' + esc(c.raw)
+        + extra
+        + '<br>Lat: ' + c.lat.toFixed(8)
+        + '<br>Lon: ' + c.lon.toFixed(8);
+      return `  <Placemark>
     <name>${esc(name)}</name>
+    <styleUrl>#pt</styleUrl>
     <description><![CDATA[${desc}]]></description>
     <Point><coordinates>${c.lon.toFixed(8)},${c.lat.toFixed(8)},0</coordinates></Point>
   </Placemark>`;
-  }).join('\n');
+    }).join('\n');
+  }
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
     <name>${esc(sourceName)} \u2013 Coordenadas</name>
     <description>Gerado por Extrator de Coordenadas</description>
+    ${styles}
+${polygonKml}
 ${placemarks}
   </Document>
 </kml>`;
