@@ -55,6 +55,12 @@ tr:nth-child(even){background:#f8f9fa}
 .btn-secondary{background:#fff;color:#1a73e8;border:2px solid #1a73e8}
 .btn-secondary:active{background:#e8f0fe}
 .btn:disabled{opacity:.5;cursor:not-allowed}
+#zone-config{display:flex;align-items:center;gap:10px;background:#fff;border-radius:10px;
+  padding:10px 14px;margin-bottom:12px;font-size:.85rem;color:#5f6368;flex-wrap:wrap}
+#zone-config span{white-space:nowrap}
+#utm-zone{border:1px solid #dadce0;border-radius:6px;padding:6px 10px;font-size:.92rem;
+  width:68px;text-transform:uppercase;font-weight:700;color:#1a73e8}
+.zone-hint{font-size:.75rem;color:#9aa0a6}
 #no-ocr-warning{background:#fff3cd;border-left:4px solid #f0a500;border-radius:8px;
   padding:12px 14px;font-size:.85rem;color:#7a4f00;margin-bottom:12px;display:none}
 #no-ocr-warning.show{display:block}
@@ -72,6 +78,13 @@ tr:nth-child(even){background:#f8f9fa}
     <div id="upload-hint">TXT &bull; PDF &bull; DOCX &bull; JPG &bull; PNG</div>
     <input type="file" id="file-input" hidden
            accept=".txt,.pdf,.docx,.doc,.jpg,.jpeg,.png,.webp,.bmp">
+  </div>
+
+  <div id="zone-config">
+    <span>Zona UTM</span>
+    <input type="text" id="utm-zone" placeholder="ex: 24K" value="24K" maxlength="4"
+           title="Usada para coordenadas no formato X= Y= sem zona especificada">
+    <span class="zone-hint">para formato X= Y=</span>
   </div>
 
   <div id="no-ocr-warning">
@@ -318,9 +331,7 @@ function extractCoordinates(text) {
       results.push({ type:'dms', raw: m[0].trim(), lat, lon });
   }
 
-  // ── 3. UTM: 23K 333000 7375000 ──────────────────────────────────
-  // Zona 23K E333000 N7375000
-  // 23 K  0350000  7750000
+  // ── 3a. UTM com zona: 23K 333000 7375000 / Zona 23K E333000 N7375000 ──
   const rUTM = /(?:zona\s*)?(\d{1,2})\s*([C-Xc-x])\s+(?:[EeLe])?\s*(\d{6,7})\s+(?:[NnSs])?\s*(\d{6,7})/g;
   for (const m of text.matchAll(rUTM)) {
     const zoneStr = m[1] + m[2].toUpperCase();
@@ -331,6 +342,21 @@ function extractCoordinates(text) {
       if (validLatLon(lat, lon))
         results.push({ type:'utm', raw: m[0].trim(), lat, lon,
           extra: 'Zona ' + zoneStr + '  E ' + east + '  N ' + north });
+    } catch(_) {}
+  }
+
+  // ── 3b. UTM X= Y= (documentos brasileiros: "X=203101.1645, Y=7523182.5878") ──
+  // Zona não está no texto — usa o campo de zona UTM da interface
+  const rXY = /X\s*=\s*(\d{5,7}(?:[.,]\d+)?)\s*,?\s+Y\s*=\s*(\d{6,8}(?:[.,]\d+)?)/gi;
+  const xyZone = (document.getElementById('utm-zone')?.value.trim().toUpperCase() || '24K');
+  for (const m of text.matchAll(rXY)) {
+    const east  = parseFloat(normDecimal(m[1]));
+    const north = parseFloat(normDecimal(m[2]));
+    try {
+      const { lat, lon } = utmToLatLon(east, north, xyZone);
+      if (validLatLon(lat, lon))
+        results.push({ type:'utm', raw: m[0].trim(), lat, lon,
+          extra: 'Zona ' + xyZone + '  E ' + east.toFixed(4) + '  N ' + north.toFixed(4) });
     } catch(_) {}
   }
 
