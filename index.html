@@ -353,6 +353,10 @@ function normDecimal(s) {
   // normalize comma-decimal to dot
   return s.replace(',', '.');
 }
+// Normalize Brazilian number with dot-thousands + comma-decimal: "7.624.016,01" → 7624016.01
+function normBR(s) {
+  return parseFloat(s.replace(/\./g, '').replace(',', '.'));
+}
 
 function dmsToDecimal(deg, min, sec, dir) {
   const d = Math.abs(parseFloat(deg)) + parseFloat(min)/60 + parseFloat(normDecimal(sec))/3600;
@@ -454,6 +458,23 @@ function extractCoordinates(text) {
       if (validLatLon(lat, lon))
         results.push({ type:'utm', raw: m[0].trim(), lat, lon,
           extra: 'Zona ' + xyZone + '  E ' + east.toFixed(4) + '  N ' + north.toFixed(4) });
+    } catch(_) {}
+  }
+
+  // ── 3c. UTM N/E com separador de milhar (Memorial Descritivo brasileiro) ─────
+  // Ex: "N 7.624.016,01m e E 280.358,03m"
+  // Ex: "N 7.624.016,01 E 280.358,03"
+  // Fuso/zona: usa campo da interface (padrão 24K)
+  const rNE = /N\s+([\d]{1,2}\.[\d.]+,\d+)\s*m?\s*(?:e\s+)?E\s+([\d.]+,\d+)\s*m?/gi;
+  const neZone = (document.getElementById('utm-zone')?.value.trim().toUpperCase() || '24K');
+  for (const m of text.matchAll(rNE)) {
+    const north = normBR(m[1]);
+    const east  = normBR(m[2]);
+    try {
+      const { lat, lon } = utmToLatLon(east, north, neZone);
+      if (validLatLon(lat, lon))
+        results.push({ type:'utm', raw: m[0].trim(), lat, lon,
+          extra: 'Zona ' + neZone + '  N ' + north.toFixed(2) + '  E ' + east.toFixed(2) });
     } catch(_) {}
   }
 
