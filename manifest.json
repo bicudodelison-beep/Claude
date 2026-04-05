@@ -1,0 +1,30 @@
+{
+  "name": "Extrator de Coordenadas",
+  "short_name": "CoordExtract",
+  "description": "Extrai coordenadas geográficas e converte para KML",
+  "start_url": "/Claude/",
+  "scope": "/Claude/",
+  "display": "standalone",
+  "background_color": "#f0f4f8",
+  "theme_color": "#1a73e8",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ],
+  "share_target": {
+    "action": "/Claude/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "files": [{
+        "name": "file",
+        "accept": [
+          "text/plain",
+          "application/pdf",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "image/jpeg", "image/png", "image/webp"
+        ]
+      }]
+    }
+  }
+}

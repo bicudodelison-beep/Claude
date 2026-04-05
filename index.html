@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <meta name="theme-color" content="#1a73e8">
+<link rel="manifest" href="/Claude/manifest.json">
 <title>Extrator de Coordenadas</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -476,6 +477,30 @@ function resetUI() {
   shareBtn.disabled = true;
   downloadBtn.disabled = true;
   summaryEl.textContent = '';
+}
+
+// ── Service Worker + Share Target ────────────────────────────────
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/Claude/sw.js', { scope: '/Claude/' })
+    .catch(e => console.warn('SW:', e));
+
+  // File pushed by SW while app is already open
+  navigator.serviceWorker.addEventListener('message', event => {
+    if (event.data?.type === 'SHARED_FILE') fetchSharedFile();
+    if (event.data?.type === 'FILE_DATA') {
+      const { buf, mime, filename } = event.data;
+      const file = new File([buf], filename, { type: mime });
+      processFile(file);
+    }
+  });
+
+  // App was launched fresh by share
+  if (location.search.includes('from-share=1')) fetchSharedFile();
+}
+
+async function fetchSharedFile() {
+  const sw = navigator.serviceWorker.controller;
+  if (sw) sw.postMessage('GET_SHARED_FILE');
 }
 </script>
 </body>
