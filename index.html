@@ -231,7 +231,12 @@ async function processFile(file) {
   const coords = extractCoordinates(text);
 
   if (coords.length === 0) {
-    showStatus('error', false, 'Nenhuma coordenada encontrada no arquivo.');
+    // Auto-populate paste area so user can see/verify what was extracted
+    const pasteArea = document.getElementById('paste-area');
+    pasteArea.value = text.slice(0, 4000);
+    document.getElementById('paste-section').open = true;
+    showStatus('error', false,
+      'Nenhuma coordenada encontrada. O texto extra\u00eddo est\u00e1 no campo abaixo — verifique e clique em "Extrair coordenadas".');
     return;
   }
 
@@ -258,8 +263,22 @@ async function extractPDF(file) {
   let out = '';
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
-    const tc   = await page.getTextContent();
-    out += tc.items.map(it => it.str).join(' ') + '\n';
+    const tc   = await page.getTextContent({ normalizeWhitespace: true });
+    let lastY = null;
+    for (const item of tc.items) {
+      if (item.str === undefined) continue;
+      // Use Y position from transform matrix to detect line breaks
+      const y = item.transform ? item.transform[5] : null;
+      if (lastY !== null && y !== null && Math.abs(y - lastY) > 2) {
+        out += '\n';
+      } else if (out.length && !out.endsWith(' ') && !out.endsWith('\n')) {
+        out += ' ';
+      }
+      out += item.str;
+      if (item.hasEOL) out += '\n';
+      lastY = y;
+    }
+    out += '\n\n';
   }
   return out;
 }
