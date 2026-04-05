@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="theme-color" content="#1a73e8">
+<title>Extrator de Coordenadas</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#f0f4f8;color:#202124;min-height:100dvh}
+header{background:#1a73e8;color:#fff;padding:16px;text-align:center}
+header h1{font-size:1.3rem;font-weight:700}
+header p{font-size:.85rem;opacity:.85;margin-top:4px}
+main{padding:16px;max-width:680px;margin:0 auto}
+#upload-zone{background:#fff;border:2px dashed #1a73e8;border-radius:14px;padding:36px 20px;
+  text-align:center;cursor:pointer;margin-bottom:16px;touch-action:manipulation;
+  display:flex;flex-direction:column;align-items:center;gap:10px;transition:background .2s}
+#upload-zone.drag-over,#upload-zone:hover{background:#e8f0fe}
+#upload-icon{font-size:2.5rem}
+#upload-label{font-size:1rem;font-weight:600;color:#1a73e8}
+#upload-hint{font-size:.8rem;color:#5f6368}
+#status{background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:16px;
+  display:none;align-items:center;gap:12px;font-size:.92rem;color:#202124}
+#status.show{display:flex}
+#status.error{border-left:4px solid #d93025;color:#d93025}
+#status.info{border-left:4px solid #1a73e8}
+#status.success{border-left:4px solid #137333}
+.spinner{width:22px;height:22px;border:3px solid #e0e0e0;border-top-color:#1a73e8;
+  border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+#results{display:none}
+#results.show{display:block}
+#summary{font-size:.9rem;color:#5f6368;margin-bottom:10px;font-weight:500}
+.table-wrap{overflow-x:auto;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.1)}
+table{width:100%;border-collapse:collapse;background:#fff;font-size:.82rem}
+th{background:#1a73e8;color:#fff;padding:10px 8px;text-align:left;white-space:nowrap}
+td{padding:9px 8px;border-bottom:1px solid #e8eaed;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:nth-child(even){background:#f8f9fa}
+.badge{display:inline-block;padding:2px 7px;border-radius:20px;font-size:.72rem;font-weight:700;letter-spacing:.03em}
+.badge.decimal{background:#e8f0fe;color:#1a73e8}
+.badge.dms{background:#e6f4ea;color:#137333}
+.badge.utm{background:#fce8e6;color:#c5221f}
+.badge.labeled{background:#fef7e0;color:#b06000}
+.coord-raw{max-width:160px;word-break:break-all;font-size:.75rem;color:#5f6368}
+.copy-btn{background:#f1f3f4;border:none;border-radius:6px;padding:4px 8px;
+  font-size:.72rem;cursor:pointer;white-space:nowrap;color:#1a73e8;font-weight:600}
+.copy-btn:active{background:#e8f0fe}
+#actions{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+.btn{flex:1;min-width:140px;padding:15px 10px;border:none;border-radius:10px;
+  font-size:.95rem;font-weight:700;cursor:pointer;min-height:50px;letter-spacing:.01em}
+.btn-primary{background:#1a73e8;color:#fff}
+.btn-primary:active{background:#1557b0}
+.btn-secondary{background:#fff;color:#1a73e8;border:2px solid #1a73e8}
+.btn-secondary:active{background:#e8f0fe}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+#no-ocr-warning{background:#fff3cd;border-left:4px solid #f0a500;border-radius:8px;
+  padding:12px 14px;font-size:.85rem;color:#7a4f00;margin-bottom:12px;display:none}
+#no-ocr-warning.show{display:block}
+</style>
+</head>
+<body>
+<header>
+  <h1>Extrator de Coordenadas</h1>
+  <p>Extrai, tabela e converte para KML &bull; Google Earth</p>
+</header>
+<main>
+  <div id="upload-zone" role="button" tabindex="0" aria-label="Selecionar arquivo">
+    <div id="upload-icon">&#128204;</div>
+    <div id="upload-label">Toque para selecionar arquivo</div>
+    <div id="upload-hint">TXT &bull; PDF &bull; DOCX &bull; JPG &bull; PNG</div>
+    <input type="file" id="file-input" hidden
+           accept=".txt,.pdf,.docx,.doc,.jpg,.jpeg,.png,.webp,.bmp">
+  </div>
+
+  <div id="no-ocr-warning">
+    &#9888; Imagens e PDFs digitalizados n&#227;o possuem texto seleccion&#225;vel.
+    Para extrair coordenadas de imagens, copie o texto manualmente e cole em um arquivo TXT.
+  </div>
+
+  <div id="status" role="status" aria-live="polite"></div>
+
+  <div id="results">
+    <div id="summary"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Tipo</th>
+            <th>Original</th>
+            <th>Latitude</th>
+            <th>Longitude</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+    </div>
+    <div id="actions">
+      <button class="btn btn-primary" id="share-btn" disabled>&#127758; Abrir no Google Earth</button>
+      <button class="btn btn-secondary" id="download-btn" disabled>&#11015; Baixar KML</button>
+    </div>
+  </div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
+        crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"
+        crossorigin="anonymous"></script>
+<script>
+'use strict';
+
+// ── pdf.js worker ────────────────────────────────────────────────
+if (typeof pdfjsLib !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+
+// ── UI refs ──────────────────────────────────────────────────────
+const uploadZone  = document.getElementById('upload-zone');
+const fileInput   = document.getElementById('file-input');
+const statusEl    = document.getElementById('status');
+const resultsEl   = document.getElementById('results');
+const summaryEl   = document.getElementById('summary');
+const tableBody   = document.getElementById('table-body');
+const shareBtn    = document.getElementById('share-btn');
+const downloadBtn = document.getElementById('download-btn');
+const noOcrWarn   = document.getElementById('no-ocr-warning');
+
+let kmlContent = '';
+let kmlFilename = 'coordenadas.kml';
+
+// ── Upload wiring ─────────────────────────────────────────────────
+uploadZone.addEventListener('click', () => fileInput.click());
+uploadZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('drag-over'));
+uploadZone.addEventListener('drop', e => {
+  e.preventDefault();
+  uploadZone.classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) processFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) processFile(fileInput.files[0]); });
+
+// ── Main flow ─────────────────────────────────────────────────────
+async function processFile(file) {
+  resetUI();
+  kmlFilename = file.name.replace(/\.[^.]+$/, '') + '-coordenadas.kml';
+  showStatus('info', true, 'Lendo arquivo \u2026');
+
+  const mime = file.type || '';
+  const isImage = mime.startsWith('image/');
+  const isPDF   = mime === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+  const isDOCX  = mime.includes('wordprocessingml') || /\.docx?$/i.test(file.name);
+
+  if (isImage) {
+    noOcrWarn.classList.add('show');
+    showStatus('error', false, 'Imagens n\u00e3o possuem texto extra\u00edvel automaticamente. '
+      + 'Por favor, copie as coordenadas e envie como arquivo TXT.');
+    return;
+  }
+
+  let text = '';
+  try {
+    if (isPDF)       text = await extractPDF(file);
+    else if (isDOCX) text = await extractDOCX(file);
+    else             text = await readText(file);
+  } catch (err) {
+    showStatus('error', false, 'Erro ao ler arquivo: ' + err.message);
+    return;
+  }
+
+  if (!text || text.trim().length < 5) {
+    noOcrWarn.classList.add('show');
+    showStatus('error', false, 'Nenhum texto extra\u00eddo. Este PDF pode ser digitalizado (imagem). '
+      + 'Tente enviar como arquivo TXT com o texto copiado.');
+    return;
+  }
+
+  showStatus('info', true, 'Buscando coordenadas\u2026');
+
+  const coords = extractCoordinates(text);
+
+  if (coords.length === 0) {
+    showStatus('error', false, 'Nenhuma coordenada encontrada no arquivo.');
+    return;
+  }
+
+  kmlContent = generateKML(coords, file.name);
+  renderTable(coords);
+  showStatus('success', false, coords.length + ' coordenada' + (coords.length > 1 ? 's' : '') + ' encontrada' + (coords.length > 1 ? 's' : '') + ' em \u201c' + file.name + '\u201d');
+  enableButtons();
+}
+
+// ── File readers ──────────────────────────────────────────────────
+function readText(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload  = () => resolve(r.result);
+    r.onerror = () => reject(new Error('Falha na leitura'));
+    r.readAsText(file, 'UTF-8');
+  });
+}
+
+async function extractPDF(file) {
+  if (typeof pdfjsLib === 'undefined') throw new Error('pdf.js n\u00e3o carregou. Verifique sua conex\u00e3o.');
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+  let out = '';
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const tc   = await page.getTextContent();
+    out += tc.items.map(it => it.str).join(' ') + '\n';
+  }
+  return out;
+}
+
+async function extractDOCX(file) {
+  if (typeof mammoth === 'undefined') throw new Error('mammoth.js n\u00e3o carregou. Verifique sua conex\u00e3o.');
+  const buf = await file.arrayBuffer();
+  const res = await mammoth.extractRawText({ arrayBuffer: buf });
+  return res.value;
+}
+
+// ── UTM → WGS84 ───────────────────────────────────────────────────
+function utmToLatLon(easting, northing, zoneStr) {
+  const zone   = parseInt(zoneStr, 10);
+  const letter = zoneStr.slice(-1).toUpperCase();
+  const isSouth = letter < 'N';
+
+  const a  = 6378137.0;
+  const f  = 1 / 298.257223563;
+  const e2 = 2 * f - f * f;
+  const k0 = 0.9996;
+  const lon0 = (zone - 1) * 6 - 180 + 3;
+
+  const x = easting - 500000;
+  const y = isSouth ? northing - 10000000 : northing;
+
+  const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+  const M  = y / k0;
+  const mu = M / (a * (1 - e2/4 - 3*e2*e2/64 - 5*e2*e2*e2/256));
+
+  const phi1 = mu
+    + (3*e1/2       - 27*Math.pow(e1,3)/32) * Math.sin(2*mu)
+    + (21*e1*e1/16  - 55*Math.pow(e1,4)/32) * Math.sin(4*mu)
+    + (151*Math.pow(e1,3)/96)               * Math.sin(6*mu);
+
+  const sP = Math.sin(phi1), cP = Math.cos(phi1), tP = Math.tan(phi1);
+  const N1 = a / Math.sqrt(1 - e2*sP*sP);
+  const T1 = tP*tP;
+  const C1 = (e2/(1-e2)) * cP*cP;
+  const R1 = a*(1-e2) / Math.pow(1 - e2*sP*sP, 1.5);
+  const D  = x / (N1*k0);
+  const D2=D*D, D3=D2*D, D4=D3*D, D5=D4*D, D6=D5*D;
+
+  const latRad = phi1 - (N1*tP/R1) * (
+    D2/2
+    - (5 + 3*T1 + 10*C1 - 4*C1*C1 - 9*(e2/(1-e2))) * D4/24
+    + (61 + 90*T1 + 298*C1 + 45*T1*T1 - 252*(e2/(1-e2)) - 3*C1*C1) * D6/720
+  );
+  const lonRad = (
+    D
+    - (1 + 2*T1 + C1) * D3/6
+    + (5 - 2*C1 + 28*T1 - 3*C1*C1 + 8*(e2/(1-e2)) + 24*T1*T1) * D5/120
+  ) / cP;
+
+  return {
+    lat: latRad * 180 / Math.PI,
+    lon: lon0 + lonRad * 180 / Math.PI
+  };
+}
+
+// ── Coordinate extraction ─────────────────────────────────────────
+function normDecimal(s) {
+  // normalize comma-decimal to dot
+  return s.replace(',', '.');
+}
+
+function dmsToDecimal(deg, min, sec, dir) {
+  const d = Math.abs(parseFloat(deg)) + parseFloat(min)/60 + parseFloat(normDecimal(sec))/3600;
+  return (/[SsOoWw]/.test(dir)) ? -d : d;
+}
+
+function extractCoordinates(text) {
+  const results = [];
+
+  // ── 1. Labeled: Lat ... Lon ... ─────────────────────────────────
+  // e.g.  "Latitude: -23.5504  Longitude: -46.6339"
+  //       "lat -23,5504  long -46,6339"
+  const rLabeled = /(?:lat(?:itude)?)\s*[:=]?\s*([+-]?\d{1,3}[.,]\d{3,10})\s*[,;\s]+(?:lon(?:gitude)?|lng|long)\s*[:=]?\s*([+-]?\d{1,3}[.,]\d{3,10})/gi;
+  for (const m of text.matchAll(rLabeled)) {
+    const lat = parseFloat(normDecimal(m[1]));
+    const lon = parseFloat(normDecimal(m[2]));
+    if (validLatLon(lat, lon))
+      results.push({ type:'labeled', raw: m[0].trim(), lat, lon });
+  }
+
+  // ── 2. DMS: 23°33'01.44"S 46°38'02.04"W ────────────────────────
+  // Both "23°33'01"S" and "S 23°33'01"" variants
+  // Handles W/O (West/Oeste)
+  const rDMS = /(\d{1,3})\s*[°º]\s*(\d{1,2})\s*['′]\s*(\d{1,2}(?:[.,]\d+)?)\s*["″]?\s*([NSns])\s*[,;\s]*(\d{1,3})\s*[°º]\s*(\d{1,2})\s*['′]\s*(\d{1,2}(?:[.,]\d+)?)\s*["″]?\s*([EWOewo])/g;
+  for (const m of text.matchAll(rDMS)) {
+    const lat = dmsToDecimal(m[1], m[2], m[3], m[4]);
+    const lon = dmsToDecimal(m[5], m[6], m[7], m[8]);
+    if (validLatLon(lat, lon))
+      results.push({ type:'dms', raw: m[0].trim(), lat, lon });
+  }
+
+  // DMS with hemisphere prefix: "S 23°33'01.44" W 46°38'02.04""
+  const rDMSPfx = /([NSns])\s*(\d{1,3})\s*[°º]\s*(\d{1,2})\s*['′]\s*(\d{1,2}(?:[.,]\d+)?)\s*["″]?\s*[,;\s]*([EWOewo])\s*(\d{1,3})\s*[°º]\s*(\d{1,2})\s*['′]\s*(\d{1,2}(?:[.,]\d+)?)\s*["″]?/g;
+  for (const m of text.matchAll(rDMSPfx)) {
+    const lat = dmsToDecimal(m[2], m[3], m[4], m[1]);
+    const lon = dmsToDecimal(m[6], m[7], m[8], m[5]);
+    if (validLatLon(lat, lon))
+      results.push({ type:'dms', raw: m[0].trim(), lat, lon });
+  }
+
+  // ── 3. UTM: 23K 333000 7375000 ──────────────────────────────────
+  // Zona 23K E333000 N7375000
+  // 23 K  0350000  7750000
+  const rUTM = /(?:zona\s*)?(\d{1,2})\s*([C-Xc-x])\s+(?:[EeLe])?\s*(\d{6,7})\s+(?:[NnSs])?\s*(\d{6,7})/g;
+  for (const m of text.matchAll(rUTM)) {
+    const zoneStr = m[1] + m[2].toUpperCase();
+    const east    = parseFloat(m[3]);
+    const north   = parseFloat(m[4]);
+    try {
+      const { lat, lon } = utmToLatLon(east, north, zoneStr);
+      if (validLatLon(lat, lon))
+        results.push({ type:'utm', raw: m[0].trim(), lat, lon,
+          extra: 'Zona ' + zoneStr + '  E ' + east + '  N ' + north });
+    } catch(_) {}
+  }
+
+  // ── 4. Decimal pairs ─────────────────────────────────────────────
+  // At least 4 decimal digits; valid lat/lon range; separated by comma/space/semicolon
+  // Must not be already matched by labeled/DMS
+  const rDec = /([+-]?\d{1,3}[.,]\d{4,10})\s*[°]?\s*[,;\s]\s*([+-]?\d{1,3}[.,]\d{4,10})/g;
+  for (const m of text.matchAll(rDec)) {
+    const a = parseFloat(normDecimal(m[1]));
+    const b = parseFloat(normDecimal(m[2]));
+    // Try (a=lat, b=lon) — most common
+    if (validLatLon(a, b)) {
+      results.push({ type:'decimal', raw: m[0].trim(), lat: a, lon: b });
+    }
+  }
+
+  // ── Deduplicate (4-decimal-place grid, ~11m) ─────────────────────
+  const seen = new Set();
+  return results.filter(c => {
+    if (!isFinite(c.lat) || !isFinite(c.lon)) return false;
+    const key = Math.round(c.lat*10000) + ',' + Math.round(c.lon*10000);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function validLatLon(lat, lon) {
+  return isFinite(lat) && isFinite(lon)
+    && lat >= -90 && lat <= 90
+    && lon >= -180 && lon <= 180
+    && !(lat === 0 && lon === 0); // skip null island unless specifically intended
+}
+
+// ── KML generation ────────────────────────────────────────────────
+function esc(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function generateKML(coords, sourceName) {
+  const placemarks = coords.map((c, i) => {
+    const name = 'Ponto ' + (i+1) + ' \u2013 ' + c.type.toUpperCase();
+    const extra = c.extra ? '<br>' + esc(c.extra) : '';
+    const desc = 'Tipo: ' + c.type.toUpperCase()
+      + '<br>Original: ' + esc(c.raw)
+      + extra
+      + '<br>Lat: ' + c.lat.toFixed(8)
+      + '<br>Lon: ' + c.lon.toFixed(8);
+    // KML coordinates: lon,lat,altitude
+    return `  <Placemark>
+    <name>${esc(name)}</name>
+    <description><![CDATA[${desc}]]></description>
+    <Point><coordinates>${c.lon.toFixed(8)},${c.lat.toFixed(8)},0</coordinates></Point>
+  </Placemark>`;
+  }).join('\n');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>${esc(sourceName)} \u2013 Coordenadas</name>
+    <description>Gerado por Extrator de Coordenadas</description>
+${placemarks}
+  </Document>
+</kml>`;
+}
+
+// ── Render table ──────────────────────────────────────────────────
+function renderTable(coords) {
+  tableBody.innerHTML = '';
+  coords.forEach((c, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${i+1}</td>
+      <td><span class="badge ${c.type}">${c.type.toUpperCase()}</span></td>
+      <td class="coord-raw">${esc(c.raw)}</td>
+      <td>${c.lat.toFixed(6)}</td>
+      <td>${c.lon.toFixed(6)}</td>
+      <td><button class="copy-btn" data-lat="${c.lat}" data-lon="${c.lon}">Copiar</button></td>`;
+    tableBody.appendChild(tr);
+  });
+
+  tableBody.addEventListener('click', e => {
+    if (e.target.classList.contains('copy-btn')) {
+      const btn = e.target;
+      const txt = btn.dataset.lat + ', ' + btn.dataset.lon;
+      navigator.clipboard.writeText(txt).then(() => {
+        const orig = btn.textContent;
+        btn.textContent = 'Copiado!';
+        setTimeout(() => btn.textContent = orig, 1500);
+      }).catch(() => {});
+    }
+  });
+
+  summaryEl.textContent = coords.length + ' coordenada' + (coords.length !== 1 ? 's' : '') + ' encontrada' + (coords.length !== 1 ? 's' : '');
+  resultsEl.classList.add('show');
+}
+
+// ── Download / Share ──────────────────────────────────────────────
+const KML_MIME = 'application/vnd.google-earth.kml+xml';
+
+shareBtn.addEventListener('click', async () => {
+  const file = new File([kmlContent], kmlFilename, { type: KML_MIME });
+  try {
+    await navigator.share({ files: [file], title: 'Coordenadas KML' });
+  } catch (err) {
+    if (err.name !== 'AbortError') triggerDownload();
+  }
+});
+
+downloadBtn.addEventListener('click', triggerDownload);
+
+function triggerDownload() {
+  const blob = new Blob([kmlContent], { type: KML_MIME });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = kmlFilename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function enableButtons() {
+  downloadBtn.disabled = false;
+  const canShare = navigator.canShare &&
+    navigator.canShare({ files: [new File([''], 'x.kml', { type: KML_MIME })] });
+  shareBtn.disabled = !canShare;
+}
+
+// ── Status helper ─────────────────────────────────────────────────
+function showStatus(type, loading, msg) {
+  statusEl.className = 'show ' + type;
+  statusEl.innerHTML = (loading ? '<div class="spinner"></div>' : '') + '<span>' + msg + '</span>';
+}
+
+function resetUI() {
+  noOcrWarn.classList.remove('show');
+  resultsEl.classList.remove('show');
+  tableBody.innerHTML = '';
+  kmlContent = '';
+  shareBtn.disabled = true;
+  downloadBtn.disabled = true;
+  summaryEl.textContent = '';
+}
+</script>
+</body>
+</html>
