@@ -73,6 +73,20 @@ tr:nth-child(even){background:#f8f9fa}
   display:flex;flex-direction:column;gap:8px;font-size:.88rem;color:#202124}
 #polygon-opt label{display:flex;align-items:center;gap:8px;cursor:pointer}
 #polygon-opt input[type=checkbox]{width:18px;height:18px;accent-color:#1a73e8}
+#api-config{background:#fff;border-radius:10px;padding:10px 14px;margin-bottom:12px;
+  font-size:.85rem;color:#5f6368}
+#api-config summary{cursor:pointer;font-weight:600;color:#5f6368;list-style:none;padding:2px 0}
+#api-config summary::before{content:'▶ ';font-size:.75rem}
+#api-config[open] summary::before{content:'▼ '}
+#api-inner{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+#openai-key{border:1px solid #dadce0;border-radius:6px;padding:9px 10px;font-size:.85rem;
+  font-family:monospace;width:100%}
+#save-key-btn{background:#1a73e8;color:#fff;border:none;border-radius:8px;padding:10px;
+  font-size:.88rem;font-weight:700;cursor:pointer}
+#clear-key-btn{background:#f1f3f4;color:#d93025;border:none;border-radius:8px;padding:8px;
+  font-size:.82rem;cursor:pointer}
+.api-hint{font-size:.78rem;color:#9aa0a6;line-height:1.4}
+.badge.ai{background:#e8f0fe;color:#1a73e8}
 #no-ocr-warning{background:#fff3cd;border-left:4px solid #f0a500;border-radius:8px;
   padding:12px 14px;font-size:.85rem;color:#7a4f00;margin-bottom:12px;display:none}
 #no-ocr-warning.show{display:block}
@@ -84,6 +98,17 @@ tr:nth-child(even){background:#f8f9fa}
   <p>Extrai, tabela e converte para KML &bull; Google Earth</p>
 </header>
 <main>
+
+  <details id="api-config">
+    <summary>&#128273; Chave OpenAI (para PDFs escaneados e imagens)</summary>
+    <div id="api-inner">
+      <input type="password" id="openai-key" placeholder="sk-proj-..." autocomplete="off"
+             spellcheck="false">
+      <button id="save-key-btn">Salvar no celular</button>
+      <p class="api-hint">A chave fica salva <b>apenas no seu dispositivo</b> (localStorage). Modelo usado: <b>gpt-4o-mini</b>.</p>
+      <button id="clear-key-btn">Apagar chave salva</button>
+    </div>
+  </details>
   <div id="upload-zone" role="button" tabindex="0" aria-label="Selecionar arquivo">
     <div id="upload-icon">&#128204;</div>
     <div id="upload-label">Toque para selecionar arquivo</div>
@@ -211,13 +236,30 @@ async function processFile(file) {
   const isPDF   = mime === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
   const isDOCX  = mime.includes('wordprocessingml') || /\.docx?$/i.test(file.name);
 
+  const hasKey = !!getApiKey();
+
+  // ── Images: require GPT vision ──────────────────────────────────
   if (isImage) {
-    noOcrWarn.classList.add('show');
-    showStatus('error', false, 'Imagens n\u00e3o possuem texto extra\u00edvel automaticamente. '
-      + 'Por favor, copie as coordenadas e envie como arquivo TXT.');
+    if (!hasKey) {
+      noOcrWarn.classList.add('show');
+      showStatus('error', false, 'Para extrair de imagens, adicione sua chave OpenAI no topo da p\u00e1gina.');
+      return;
+    }
+    showStatus('info', true, 'Analisando imagem com IA (gpt-4o-mini)\u2026');
+    try {
+      const buf    = await file.arrayBuffer();
+      const b64    = btoa(String.fromCharCode(...new Uint8Array(buf)));
+      const coords = await extractWithGPT(b64, true, mime);
+      if (!coords || coords.length === 0) {
+        showStatus('error', false, 'Nenhuma coordenada encontrada na imagem.');
+        return;
+      }
+      finishExtraction(coords, file.name);
+    } catch(e) { showStatus('error', false, 'Erro IA: ' + e.message); }
     return;
   }
 
+  // ── Text-based files ────────────────────────────────────────────
   let text = '';
   try {
     if (isPDF)       text = await extractPDF(file);
@@ -228,31 +270,71 @@ async function processFile(file) {
     return;
   }
 
-  if (!text || text.trim().length < 5) {
-    noOcrWarn.classList.add('show');
-    showStatus('error', false, 'Nenhum texto extra\u00eddo. Este PDF pode ser digitalizado (imagem). '
-      + 'Tente enviar como arquivo TXT com o texto copiado.');
+  const isScanned = !text || text.trim().length < 20;
+
+  // ── Scanned PDF: use GPT vision on rendered pages ───────────────
+  if (isScanned && isPDF) {
+    if (!hasKey) {
+      noOcrWarn.classList.add('show');
+      showStatus('error', false, 'PDF digitalizado detectado. Adicione a chave OpenAI para usar OCR com IA.');
+      return;
+    }
+    showStatus('info', true, 'PDF digitalizado — convertendo p\u00e1ginas e analisando com IA\u2026');
+    try {
+      const pages  = await pdfToImages(file);
+      let allCoords = [];
+      for (let i = 0; i < pages.length; i++) {
+        showStatus('info', true, `Analisando p\u00e1gina ${i+1}/${pages.length}\u2026`);
+        const r = await extractWithGPT(pages[i], true, 'image/jpeg');
+        if (r) allCoords = allCoords.concat(r);
+      }
+      if (allCoords.length === 0) { showStatus('error', false, 'Nenhuma coordenada encontrada.'); return; }
+      finishExtraction(dedupeCoords(allCoords), file.name);
+    } catch(e) { showStatus('error', false, 'Erro IA: ' + e.message); }
     return;
   }
 
   showStatus('info', true, 'Buscando coordenadas\u2026');
 
-  const coords = extractCoordinates(text);
+  // Try regex first
+  let coords = extractCoordinates(text);
+
+  // If regex found nothing and we have a key, try GPT on the text
+  if (coords.length === 0 && hasKey) {
+    showStatus('info', true, 'Regex sem resultado — tentando com IA\u2026');
+    try {
+      const gptCoords = await extractWithGPT(text, false, '');
+      if (gptCoords && gptCoords.length > 0) coords = gptCoords;
+    } catch(e) { console.warn('GPT fallback failed:', e.message); }
+  }
 
   if (coords.length === 0) {
-    // Auto-populate paste area so user can see/verify what was extracted
     const pasteArea = document.getElementById('paste-area');
     pasteArea.value = text.slice(0, 4000);
     document.getElementById('paste-section').open = true;
     showStatus('error', false,
-      'Nenhuma coordenada encontrada. O texto extra\u00eddo est\u00e1 no campo abaixo — verifique e clique em "Extrair coordenadas".');
+      'Nenhuma coordenada encontrada. Texto extra\u00eddo abaixo — verifique e clique "Extrair coordenadas".');
     return;
   }
 
-  kmlContent = generateKML(coords, file.name);
+  finishExtraction(coords, file.name);
+}
+
+function finishExtraction(coords, filename) {
+  kmlContent = generateKML(coords, filename);
   renderTable(coords);
-  showStatus('success', false, coords.length + ' coordenada' + (coords.length > 1 ? 's' : '') + ' encontrada' + (coords.length > 1 ? 's' : '') + ' em \u201c' + file.name + '\u201d');
+  showStatus('success', false, coords.length + ' coordenada' + (coords.length > 1 ? 's' : '')
+    + ' encontrada' + (coords.length > 1 ? 's' : '') + ' em \u201c' + filename + '\u201d');
   enableButtons();
+}
+
+function dedupeCoords(list) {
+  const seen = new Set();
+  return list.filter(c => {
+    if (!isFinite(c.lat) || !isFinite(c.lon)) return false;
+    const k = Math.round(c.lat*10000)+','+Math.round(c.lon*10000);
+    if (seen.has(k)) return false; seen.add(k); return true;
+  });
 }
 
 // ── File readers ──────────────────────────────────────────────────
@@ -674,6 +756,91 @@ function resetUI() {
   shareBtn.disabled = true;
   downloadBtn.disabled = true;
   summaryEl.textContent = '';
+}
+
+// ── OpenAI API key management ─────────────────────────────────────
+const KEY_STORE = 'oai_key_v1';
+function getApiKey() { return localStorage.getItem(KEY_STORE) || ''; }
+
+document.getElementById('save-key-btn').addEventListener('click', () => {
+  const val = document.getElementById('openai-key').value.trim();
+  if (!val.startsWith('sk-')) { alert('Chave inválida. Deve começar com sk-'); return; }
+  localStorage.setItem(KEY_STORE, val);
+  document.getElementById('openai-key').value = '';
+  document.getElementById('api-config').open = false;
+  showStatus('success', false, 'Chave salva no dispositivo.');
+});
+document.getElementById('clear-key-btn').addEventListener('click', () => {
+  localStorage.removeItem(KEY_STORE);
+  showStatus('info', false, 'Chave apagada.');
+});
+// Pre-fill mask if key exists
+(function() {
+  if (getApiKey()) {
+    document.getElementById('openai-key').placeholder = '(chave salva) — cole nova para substituir';
+  }
+})();
+
+// ── OpenAI: extract coordinates via gpt-4o-mini ───────────────────
+const GPT_PROMPT = `Você é um extrator preciso de coordenadas geográficas.
+Analise o conteúdo e retorne APENAS um array JSON com todas as coordenadas encontradas.
+Nenhum texto extra, nenhum markdown.
+
+Para cada coordenada, retorne:
+{"type":"decimal"|"dms"|"utm", "raw":"texto original", "lat":número, "lon":número, "label":"nome próximo ou vazio"}
+
+Regras:
+- Coordenadas decimais: negativo = Sul/Oeste
+- DMS: converter para decimal; vírgula = ponto decimal; "O"/"Oeste" = Oeste
+- UTM (X=E, Y=N ou N.../E...): converter para WGS84 usando a zona indicada no texto (padrão Brasil)
+- lat e lon em graus decimais WGS84
+- Retorne [] se nenhuma coordenada encontrada`;
+
+async function extractWithGPT(content, isImage, mimeType) {
+  const key = getApiKey();
+  if (!key) return null; // no key → fall through to regex
+
+  const userContent = isImage
+    ? [{ type:'image_url', image_url:{ url: `data:${mimeType};base64,${content}`, detail:'high' } },
+       { type:'text', text: GPT_PROMPT }]
+    : [{ type:'text', text: GPT_PROMPT + '\n\nConteúdo:\n' + content.slice(0, 60000) }];
+
+  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json', 'Authorization':'Bearer ' + key },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      max_tokens: 4096,
+      messages: [{ role:'user', content: userContent }]
+    })
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({}));
+    throw new Error('OpenAI: ' + (err.error?.message || resp.status));
+  }
+  const data = await resp.json();
+  const raw = data.choices?.[0]?.message?.content?.trim() || '[]';
+  const clean = raw.replace(/^```json\s*/,'').replace(/\s*```$/,'');
+  return JSON.parse(clean);
+}
+
+// Convert PDF pages to base64 images for vision
+async function pdfToImages(file) {
+  if (typeof pdfjsLib === 'undefined') throw new Error('pdf.js não carregou.');
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+  const images = [];
+  for (let i = 1; i <= Math.min(doc.numPages, 10); i++) {
+    const page = await doc.getPage(i);
+    const vp   = page.getViewport({ scale: 1.5 });
+    const canvas = document.createElement('canvas');
+    canvas.width  = vp.width;
+    canvas.height = vp.height;
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+    images.push(canvas.toDataURL('image/jpeg', 0.85).split(',')[1]);
+  }
+  return images;
 }
 
 // ── Service Worker + Share Target ────────────────────────────────
