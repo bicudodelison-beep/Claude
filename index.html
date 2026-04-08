@@ -207,7 +207,7 @@ fileInput.addEventListener('change', () => { if (fileInput.files[0]) processFile
 
 // ── Paste text flow ────────────────────────────────────────────────
 document.getElementById('paste-btn').addEventListener('click', () => {
-  const text = document.getElementById('paste-area').value.trim();
+  const text = fixFragmentedNumbers(document.getElementById('paste-area').value.trim());
   if (!text) return;
   resetUI();
   showStatus('info', true, 'Analisando texto colado\u2026');
@@ -352,22 +352,38 @@ async function extractPDF(file) {
     const page = await doc.getPage(i);
     const tc   = await page.getTextContent({ normalizeWhitespace: true });
     let lastY = null;
+    let lastEndX = null;
     for (const item of tc.items) {
       if (item.str === undefined) continue;
-      // Use Y position from transform matrix to detect line breaks
       const y = item.transform ? item.transform[5] : null;
+      const x = item.transform ? item.transform[4] : null;
       if (lastY !== null && y !== null && Math.abs(y - lastY) > 2) {
         out += '\n';
       } else if (out.length && !out.endsWith(' ') && !out.endsWith('\n')) {
-        out += ' ';
+        // Only add space if there's a real visual gap between items (> 2pt)
+        const gap = (x !== null && lastEndX !== null) ? x - lastEndX : 99;
+        if (gap > 2) out += ' ';
       }
       out += item.str;
       if (item.hasEOL) out += '\n';
       lastY = y;
+      lastEndX = (x !== null) ? x + (item.width || 0) : null;
     }
     out += '\n\n';
   }
+  // Fix fragmented numbers caused by bold/regular font switches in pdf.js
+  // "7.490. 011,83" → "7.490.011,83"   "7 77.627,4 4" → "777.627,44"
+  out = fixFragmentedNumbers(out);
   return out;
+}
+
+// Merge digit sequences broken by spaces (bold↔regular font artifacts)
+function fixFragmentedNumbers(text) {
+  // Pass 1: digit[.,digit]* SPACE digit  →  join (covers "7 77", "627,4 4", "7.490. 011")
+  let t = text.replace(/(\d[\d.,]*) +(\d)/g, '$1$2');
+  // Pass 2: repeat once more to catch residual cases after first merge
+  t = t.replace(/(\d[\d.,]*) +(\d)/g, '$1$2');
+  return t;
 }
 
 async function extractDOCX(file) {
