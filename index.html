@@ -279,15 +279,11 @@ async function processFile(file) {
       showStatus('error', false, 'PDF digitalizado detectado. Adicione a chave OpenAI para usar OCR com IA.');
       return;
     }
-    showStatus('info', true, 'PDF digitalizado — convertendo p\u00e1ginas e analisando com IA\u2026');
+    showStatus('info', true, 'PDF digitalizado — convertendo p\u00e1ginas (qualidade alta)\u2026');
     try {
-      const pages  = await pdfToImages(file);
-      let allCoords = [];
-      for (let i = 0; i < pages.length; i++) {
-        showStatus('info', true, `Analisando p\u00e1gina ${i+1}/${pages.length}\u2026`);
-        const r = await extractWithGPT(pages[i], true, 'image/jpeg');
-        if (r) allCoords = allCoords.concat(r);
-      }
+      const pages = await pdfToImages(file);
+      showStatus('info', true, `${pages.length} p\u00e1gina(s) — enviando para IA em lotes\u2026`);
+      const allCoords = await extractFromPages(pages);
       if (allCoords.length === 0) { showStatus('error', false, 'Nenhuma coordenada encontrada.'); return; }
       finishExtraction(dedupeCoords(allCoords), file.name);
     } catch(e) { showStatus('error', false, 'Erro IA: ' + e.message); }
@@ -783,17 +779,19 @@ document.getElementById('clear-key-btn').addEventListener('click', () => {
 
 // ── OpenAI: extract coordinates via gpt-4o-mini ───────────────────
 const GPT_PROMPT = `Você é um extrator preciso de coordenadas geográficas.
-Analise o conteúdo e retorne APENAS um array JSON com todas as coordenadas encontradas.
-Nenhum texto extra, nenhum markdown.
+Analise TODO o conteúdo (incluindo tabelas, listas, parágrafos) e retorne APENAS um array JSON com TODAS as coordenadas encontradas.
+Não pule nenhuma. Nenhum texto extra, nenhum markdown, apenas o array JSON.
 
 Para cada coordenada, retorne:
-{"type":"decimal"|"dms"|"utm", "raw":"texto original", "lat":número, "lon":número, "label":"nome próximo ou vazio"}
+{"type":"decimal"|"dms"|"utm","raw":"texto original exato","lat":número,"lon":número,"label":"nome do vértice/ponto ou vazio"}
 
 Regras:
+- Extraia TODAS as linhas de tabelas com coordenadas — não pare na primeira página ou primeiras linhas
 - Coordenadas decimais: negativo = Sul/Oeste
-- DMS: converter para decimal; vírgula = ponto decimal; "O"/"Oeste" = Oeste
-- UTM (X=E, Y=N ou N.../E...): converter para WGS84 usando a zona indicada no texto (padrão Brasil)
-- lat e lon em graus decimais WGS84
+- DMS (graus°minutos'segundos"): converter para decimal; vírgula = ponto decimal; "O"/"Oeste" = Oeste
+- UTM com X=/Y= ou N.../E...: converter para WGS84; use a zona UTM indicada no documento
+- Para tabelas: cada linha com longitude+latitude = uma coordenada separada
+- label: use o código/nome do vértice (ex: ARIS-V-5826, P01, V-01) se visível na mesma linha
 - Retorne [] se nenhuma coordenada encontrada`;
 
 async function extractWithGPT(content, isImage, mimeType) {
@@ -810,7 +808,7 @@ async function extractWithGPT(content, isImage, mimeType) {
     headers: { 'Content-Type':'application/json', 'Authorization':'Bearer ' + key },
     body: JSON.stringify({
       model: 'gpt-4o-mini',
-      max_tokens: 4096,
+      max_tokens: 16384,
       messages: [{ role:'user', content: userContent }]
     })
   });
@@ -825,22 +823,48 @@ async function extractWithGPT(content, isImage, mimeType) {
   return JSON.parse(clean);
 }
 
-// Convert PDF pages to base64 images for vision
+// Convert ALL PDF pages to base64 images for vision (scale 2.0 for better OCR)
 async function pdfToImages(file) {
   if (typeof pdfjsLib === 'undefined') throw new Error('pdf.js não carregou.');
   const buf = await file.arrayBuffer();
   const doc = await pdfjsLib.getDocument({ data: buf }).promise;
   const images = [];
-  for (let i = 1; i <= Math.min(doc.numPages, 10); i++) {
+  for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
-    const vp   = page.getViewport({ scale: 1.5 });
+    const vp   = page.getViewport({ scale: 2.0 });
     const canvas = document.createElement('canvas');
     canvas.width  = vp.width;
     canvas.height = vp.height;
     await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-    images.push(canvas.toDataURL('image/jpeg', 0.85).split(',')[1]);
+    images.push(canvas.toDataURL('image/jpeg', 0.90).split(',')[1]);
   }
   return images;
+}
+
+// Send pages in batches of 4 images per API call (maintains table context)
+async function extractFromPages(pages) {
+  let all = [];
+  const BATCH = 4;
+  for (let i = 0; i < pages.length; i += BATCH) {
+    const batch = pages.slice(i, i + BATCH);
+    showStatus('info', true,
+      `Analisando p\u00e1ginas ${i+1}–${Math.min(i+BATCH, pages.length)} de ${pages.length}\u2026`);
+    const content = [
+      ...batch.map(b64 => ({ type:'image_url', image_url:{ url:`data:image/jpeg;base64,${b64}`, detail:'high' } })),
+      { type:'text', text: GPT_PROMPT + `\n\nEssas são as páginas ${i+1} a ${Math.min(i+BATCH, pages.length)} do documento.` }
+    ];
+    const key = getApiKey();
+    const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+      body: JSON.stringify({ model:'gpt-4o-mini', max_tokens:16384, messages:[{role:'user',content}] })
+    });
+    if (!resp.ok) { const e = await resp.json().catch(()=>({})); throw new Error(e.error?.message||resp.status); }
+    const data = await resp.json();
+    const raw  = (data.choices?.[0]?.message?.content||'[]').trim().replace(/^```json\s*/,'').replace(/\s*```$/,'');
+    try { all = all.concat(JSON.parse(raw)); } catch(_) {}
+  }
+  return all;
 }
 
 // ── Service Worker + Share Target ────────────────────────────────
